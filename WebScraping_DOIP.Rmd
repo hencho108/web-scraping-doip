@@ -1,0 +1,239 @@
+---
+title: "Web-Scraping My University's Job Board"
+author: "[Hendrik Mischo](https://github.com/hendrik-mischo)"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  github_document: default
+  html_document: default
+knit: (function(inputFile, encoding) {
+  rmarkdown::render(inputFile, encoding = encoding, output_format = "all") })
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.width = 6, fig.height = 4, fig.align = "center", echo = TRUE, warning = FALSE, message = FALSE, autodep = TRUE, cache = TRUE, options(scipen = 999), comment = "", fig.path = "files/")
+```
+
+I am a student at the University of the Balearic Islands. The Department of Professional Orientation ([DOIP](https://fueib.org/ca/doip/319/oferta_doip)) at my university has a job board where new internship and job opportunities are posted regularily. 
+
+When looking for a suitable position there are several issues with this site:
+
+- You can't filter for jobs relevant to your study programme.
+- You can't view more than 10 offers at a time.
+- For details you have to click on each offer.
+
+Therefore, I decided to make a web-scraping tool to get all the relevant information at the push of a button. This allows to export the data to a CSV-file with which you can do whatever filtering you require in Excel, get notified about new offers, further analyze the data and quickly find relevant offers.
+
+Let's start by importing the relevant libraries.
+
+```{r}
+library(tidyverse)  # General-purpose data wrangling
+library(rvest)      # Parsing of HTML/XML files  
+library(stringr)    # String manipulation
+
+# Get main page
+url_doip = "https://fueib.org/es/doip/319/oferta_doip/1/pagina"
+```
+
+Now we define the necessary functions to scrape just the links to all job postings from the main page.
+
+```{r}
+# Get links to all postings on a given page
+get_offer_urls = function(url){
+  html = read_html(url)
+  html %>% 
+    html_nodes("#fue-ofertas-list > li> div.media-body > div > h3 > a") %>% 
+    html_attr("href") 
+}
+
+# Get last page number
+get_last_page = function(html){
+  pages_data = html %>% 
+    html_nodes("#fue-sidebar-affix-wrapper > div.col-lg-9.col-md-8.col-sm-12.col-xs-12 > 
+               section > div:nth-child(1) > div > nav > ul > li > a") %>% 
+    html_attr("href")
+  
+  pages_data[(length(pages_data))] %>%
+    strsplit("/") %>%
+    unlist() %>%
+    nth(6) %>%
+    as.numeric()
+}
+
+# Get list of all links to all postings
+# by applying get_offer_urls() to all pages
+get_all_offer_urls = function(url){
+  
+  # Read first page
+  first_page = read_html(url)
+  
+  # Extract the number of pages that have to be queried
+  latest_page_number = get_last_page(first_page)
+  
+  # Generate the target URLs
+  list_of_pages = str_c("https://fueib.org/es/doip/319/oferta_doip/", 1:latest_page_number, "/pagina")
+  
+  # Apply get_offer_urls() too all links
+  list_of_offers = list_of_pages %>% 
+    map(get_offer_urls) %>%
+    unlist()
+  
+  # Return list of offers
+  list_of_offers
+}
+```
+
+Using these functions, let's get a list of all the postings currently available on DOIP.
+
+```{r}
+list_of_offers = get_all_offer_urls(url_doip)
+head(list_of_offers)
+```
+
+Next we need to define another function that returns NA in case the information we want to scrape is missing. This is crucial to correctly propagate our data table.
+
+```{r}
+# Function that returns NA if the text we want to scrape is missing
+html_text_na = function(x, ...) {
+  txt = try(html_text(x, ...))
+  if (inherits(txt, "try-error") | 
+     (length(txt)==0)) { return(NA) }
+  return(txt)
+}
+```
+
+Now that we have the links to all postings, we can define several functions to scrape each piece of information that is relevant to us from these postings.
+
+```{r}
+# Get title of offer
+get_offer_title = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.dadesLloc.nomOferta"]') %>%
+    html_text_na() 
+}
+
+# Get reference number
+get_offer_ref = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.idOferta"]') %>%
+    html_text_na() 
+}
+
+# Get requirements
+get_requirements = function(html){
+  html %>% 
+    html_nodes(xpath='//td[@class="llista"]/span') %>%
+    html_text_na() %>%
+    toString()
+}
+
+# Get number of hours
+get_hours = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.dadesLloc.doip.N.practiques.S.numHoresDiaries"]') %>%
+    html_text_na() 
+}
+
+# Get tasks
+get_tasks = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.dadesLloc.doip.N.desTreball"]') %>%
+    html_text_na() 
+}
+
+# Get activity
+get_activity = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.empresa.activitat"]') %>%
+    html_text_na() 
+}
+
+# Get Location
+get_location = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.estatEspanyol.E.nomMunicipi"]') %>%
+    html_text_na() 
+}
+
+# Get salary
+get_salary = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.dadesLloc.doip.N.sou"]') %>%
+    html_text_na() 
+}
+
+# Get offer type
+get_offer_type = function(html){
+  html %>% 
+    html_nodes(xpath='//*[@id="oferta.dadesLloc.doip.N.nomTipusOferta"]') %>%
+    html_text_na() 
+}
+
+# Get offer period
+get_offer_period = function(html){
+  start = html %>%
+    html_nodes(xpath='//*[@id="oferta.dataInici"]') %>%
+    html_text_na() %>%
+    str_trim()
+  end = html %>%
+    html_nodes(xpath='//*[@id="oferta.dataFinal"]') %>%
+    html_text_na() %>%
+    str_trim()
+  paste(start, end, sep = " - ")
+}
+```
+
+Let's define one more function that extracts all the relevant information at once for a given posting by executing the previously defined functions.
+
+```{r}
+# Get all information
+get_all_info = function(html){
+  
+  url = read_html(html)
+  
+  list("title" = get_offer_title(url), 
+       "reference" = get_offer_ref(url),
+       "requirements" = get_requirements(url),
+       "hours" = get_hours(url),
+       "tasks" = get_tasks(url),
+       "activities" = get_activity(url),
+       "location" = get_location(url),
+       "salary" = get_salary(url),
+       "type" = get_offer_type(url),
+       "period" = get_offer_period(url),
+       "link" = toString(html)
+       )
+}
+```
+
+Now all that is left to do is applying `get_all_info()` to the list of links to the postings `list_of_offers` to get all information from all postings and gather it all in a data frame. This may take several minutes.
+
+```{r}
+# Get list of all info
+all_info = list_of_offers %>% map(get_all_info) 
+
+# Create data frame from list
+data = do.call(rbind.data.frame, all_info)
+
+# Convert all columns to character
+data[] = lapply(data, as.character)
+
+# Let's also save it as a CSV
+write.table(data, file = "doip_scraped.csv", na = "", fileEncoding = "UTF-8", sep = ";")
+
+# Check head of data
+#head(data)
+```
+
+Now let's just select the ones that are relevant to my study programme.
+
+```{r}
+offers_madm = data %>%
+  select(everything()) %>%
+  filter(str_detect(tolower(requirements), "datos masivos"))
+
+write.table(offers_madm, file = "offers_madm.csv", na = "", fileEncoding = "UTF-8", sep = ";")
+
+offers_madm[c("title", "reference", "type", "salary", "link")]
+```
+
+
